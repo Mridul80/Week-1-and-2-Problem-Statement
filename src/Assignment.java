@@ -1,149 +1,108 @@
-import java.util.*;
-import java.io.*;
+import java.util.concurrent.ConcurrentHashMap;
 
-class PlagiarismDetector {
+class TokenBucket {
 
-    private Map<String, Set<String>> ngramIndex = new HashMap<>();
+    private double tokens;
+    private final double maxTokens;
+    private final double refillRate;
+    private long lastRefillTime;
 
-    private Map<String, List<String>> documentNgrams = new HashMap<>();
-
-    private int N = 5;
-
-    private List<String> generateNgrams(String text) {
-
-        List<String> ngrams = new ArrayList<>();
-
-        String[] words = text.toLowerCase().replaceAll("[^a-z ]", "").split("\\s+");
-
-        for (int i = 0; i <= words.length - N; i++) {
-
-            StringBuilder gram = new StringBuilder();
-
-            for (int j = 0; j < N; j++) {
-                gram.append(words[i + j]).append(" ");
-            }
-
-            ngrams.add(gram.toString().trim());
-        }
-
-        return ngrams;
+    public TokenBucket(double maxTokens, double refillRate) {
+        this.maxTokens = maxTokens;
+        this.refillRate = refillRate;
+        this.tokens = maxTokens;
+        this.lastRefillTime = System.currentTimeMillis();
     }
 
-    public void addDocument(String docId, String text) {
+    private void refill() {
+        long currentTime = System.currentTimeMillis();
+        double seconds = (currentTime - lastRefillTime) / 1000.0;
 
-        List<String> ngrams = generateNgrams(text);
+        double refillTokens = seconds * refillRate;
+        tokens = Math.min(maxTokens, tokens + refillTokens);
 
-        documentNgrams.put(docId, ngrams);
-
-        for (String gram : ngrams) {
-
-            ngramIndex.putIfAbsent(gram, new HashSet<>());
-            ngramIndex.get(gram).add(docId);
-        }
-
-        System.out.println(docId + " indexed with " + ngrams.size() + " n-grams.");
+        lastRefillTime = currentTime;
     }
 
-    public void analyzeDocument(String docId) {
+    public synchronized boolean allowRequest() {
+        refill();
 
-        List<String> ngrams = documentNgrams.get(docId);
-
-        if (ngrams == null) {
-            System.out.println("Document not found.");
-            return;
+        if (tokens >= 1) {
+            tokens -= 1;
+            return true;
         }
 
-        Map<String, Integer> matchCount = new HashMap<>();
-
-        for (String gram : ngrams) {
-
-            Set<String> docs = ngramIndex.get(gram);
-
-            if (docs != null) {
-
-                for (String otherDoc : docs) {
-
-                    if (!otherDoc.equals(docId)) {
-                        matchCount.put(otherDoc,
-                                matchCount.getOrDefault(otherDoc, 0) + 1);
-                    }
-                }
-            }
-        }
-
-        System.out.println("\nAnalyzing: " + docId);
-        System.out.println("Extracted " + ngrams.size() + " n-grams\n");
-
-        for (String otherDoc : matchCount.keySet()) {
-
-            int matches = matchCount.get(otherDoc);
-
-            double similarity = (matches * 100.0) / ngrams.size();
-
-            System.out.println("Found " + matches +
-                    " matching n-grams with \"" + otherDoc + "\"");
-
-            System.out.printf("Similarity: %.2f%% ", similarity);
-
-            if (similarity > 60)
-                System.out.println("(PLAGIARISM DETECTED)");
-            else if (similarity > 10)
-                System.out.println("(Suspicious)");
-            else
-                System.out.println("(Low similarity)");
-
-            System.out.println();
-        }
+        return false;
     }
 
-    public void benchmarkSearch(String targetGram) {
+    public synchronized double getRemainingTokens() {
+        refill();
+        return tokens;
+    }
 
-        long start = System.nanoTime();
-
-        boolean found = ngramIndex.containsKey(targetGram);
-
-        long end = System.nanoTime();
-
-        System.out.println("\nHash Search Time: " + (end - start) + " ns");
-
-        start = System.nanoTime();
-
-        boolean linearFound = false;
-
-        for (String gram : ngramIndex.keySet()) {
-            if (gram.equals(targetGram)) {
-                linearFound = true;
-                break;
-            }
-        }
-
-        end = System.nanoTime();
-
-        System.out.println("Linear Search Time: " + (end - start) + " ns");
+    public long getResetTimeSeconds() {
+        return (long)((maxTokens - tokens) / refillRate);
     }
 }
 
 public class Assignment {
 
+    private static final int MAX_REQUESTS = 1000;
+    private static final int WINDOW_SECONDS = 3600;
+
+    private static final double REFILL_RATE = (double) MAX_REQUESTS / WINDOW_SECONDS;
+
+    private ConcurrentHashMap<String, TokenBucket> clientBuckets = new ConcurrentHashMap<>();
+
+
+    public boolean checkRateLimit(String clientId) {
+
+        TokenBucket bucket = clientBuckets.computeIfAbsent(
+                clientId,
+                id -> new TokenBucket(MAX_REQUESTS, REFILL_RATE)
+        );
+
+        boolean allowed = bucket.allowRequest();
+
+        if (allowed) {
+            System.out.println("Allowed (" + (int)bucket.getRemainingTokens() + " requests remaining)");
+        } else {
+            System.out.println("Denied (0 requests remaining, retry after "
+                    + bucket.getResetTimeSeconds() + "s)");
+        }
+
+        return allowed;
+    }
+
+
+    public void getRateLimitStatus(String clientId) {
+
+        TokenBucket bucket = clientBuckets.get(clientId);
+
+        if (bucket == null) {
+            System.out.println("{used: 0, limit: 1000, reset: 3600}");
+            return;
+        }
+
+        double remaining = bucket.getRemainingTokens();
+        int used = MAX_REQUESTS - (int)remaining;
+
+        System.out.println("{used: " + used +
+                ", limit: " + MAX_REQUESTS +
+                ", reset: " + bucket.getResetTimeSeconds() + "}");
+    }
+
+
     public static void main(String[] args) {
 
-        PlagiarismDetector detector = new PlagiarismDetector();
+        Assignment limiter = new Assignment();
 
-        String essay1 =
-                "Machine learning is a field of computer science that focuses on building systems that learn from data.";
+        String client = "abc123";
 
-        String essay2 =
-                "Machine learning is a field of computer science that focuses on building intelligent systems.";
+        for (int i = 0; i < 5; i++) {
+            limiter.checkRateLimit(client);
+        }
 
-        String essay3 =
-                "Artificial intelligence and machine learning are transforming modern technology.";
-
-        detector.addDocument("essay_089.txt", essay1);
-        detector.addDocument("essay_092.txt", essay2);
-        detector.addDocument("essay_123.txt", essay3);
-
-        detector.analyzeDocument("essay_123.txt");
-
-        detector.benchmarkSearch("machine learning is a field");
+        limiter.getRateLimitStatus(client);
     }
 }
