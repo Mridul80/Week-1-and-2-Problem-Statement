@@ -1,56 +1,157 @@
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
+class DNSEntry {
 
-class Assignment {
+    String domain;
+    String ipAddress;
+    long expiryTime;
 
-    private Map<String, AtomicInteger> stockMap = new ConcurrentHashMap<>();
-
-    private Map<String, Queue<Integer>> waitingList = new ConcurrentHashMap<>();
-
-    public void addProduct(String productId, int stock) {
-        stockMap.put(productId, new AtomicInteger(stock));
-        waitingList.put(productId, new LinkedList<>());
+    public DNSEntry(String domain, String ipAddress, long ttlSeconds) {
+        this.domain = domain;
+        this.ipAddress = ipAddress;
+        this.expiryTime = System.currentTimeMillis() + (ttlSeconds * 1000);
     }
 
-    public int checkStock(String productId) {
-        return stockMap.get(productId).get();
+    public boolean isExpired() {
+        return System.currentTimeMillis() > expiryTime;
+    }
+}
+
+class DNSCache {
+
+    private final int capacity;
+
+    private LinkedHashMap<String, DNSEntry> cache;
+
+    private int hits = 0;
+    private int misses = 0;
+
+    public DNSCache(int capacity) {
+
+        this.capacity = capacity;
+
+        cache = new LinkedHashMap<String, DNSEntry>(capacity, 0.75f, true) {
+
+            protected boolean removeEldestEntry(Map.Entry<String, DNSEntry> eldest) {
+                return size() > DNSCache.this.capacity;
+            }
+        };
+
+        startCleanupThread();
     }
 
-    public synchronized String purchaseItem(String productId, int userId) {
+    public synchronized String resolve(String domain) {
 
-        AtomicInteger stock = stockMap.get(productId);
+        long start = System.nanoTime();
 
-        if (stock.get() > 0) {
-            int remaining = stock.decrementAndGet();
-            return "Success! User " + userId +
-                    " purchased item. Remaining stock: " + remaining;
-        } else {
-            Queue<Integer> queue = waitingList.get(productId);
-            queue.add(userId);
-            return "Stock unavailable. User " + userId +
-                    " added to waiting list. Position: " + queue.size();
+        DNSEntry entry = cache.get(domain);
+
+        if (entry != null) {
+
+            if (!entry.isExpired()) {
+                hits++;
+
+                long time = System.nanoTime() - start;
+
+                System.out.println("Cache HIT → " + entry.ipAddress +
+                        " (retrieved in " + time / 1_000_000.0 + " ms)");
+
+                return entry.ipAddress;
+            } else {
+                cache.remove(domain);
+                System.out.println("Cache EXPIRED → " + domain);
+            }
         }
+
+        misses++;
+
+        String ip = queryUpstreamDNS(domain);
+
+        cache.put(domain, new DNSEntry(domain, ip, 300));
+
+        return ip;
     }
 
-    public void showWaitingList(String productId) {
-        System.out.println("Waiting List: " + waitingList.get(productId));
+    private String queryUpstreamDNS(String domain) {
+
+        System.out.println("Cache MISS → Querying upstream DNS for " + domain);
+
+        try {
+            Thread.sleep(100); // simulate 100ms delay
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+
+        String ip = "172.217.14." + new Random().nextInt(255);
+
+        System.out.println(domain + " → " + ip + " (TTL: 300s)");
+
+        return ip;
     }
 
-    public static void main(String[] args) {
+    public void getCacheStats() {
 
-        Assignment system = new Assignment();
+        int total = hits + misses;
 
-        system.addProduct("P101", 3);
+        double hitRate = total == 0 ? 0 : (hits * 100.0 / total);
 
-        System.out.println(system.purchaseItem("P101", 1));
-        System.out.println(system.purchaseItem("P101", 2));
-        System.out.println(system.purchaseItem("P101", 3));
-        System.out.println(system.purchaseItem("P101", 4));
-        System.out.println(system.purchaseItem("P101", 5));
+        System.out.println("\n--- Cache Statistics ---");
+        System.out.println("Total Requests: " + total);
+        System.out.println("Cache Hits: " + hits);
+        System.out.println("Cache Misses: " + misses);
+        System.out.println("Hit Rate: " + hitRate + "%");
+    }
 
-        system.showWaitingList("P101");
+    private void startCleanupThread() {
 
-        System.out.println("Current Stock: " + system.checkStock("P101"));
+        Thread cleaner = new Thread(() -> {
+
+            while (true) {
+
+                try {
+                    Thread.sleep(5000);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+
+                synchronized (this) {
+
+                    Iterator<Map.Entry<String, DNSEntry>> iterator = cache.entrySet().iterator();
+
+                    while (iterator.hasNext()) {
+
+                        Map.Entry<String, DNSEntry> entry = iterator.next();
+
+                        if (entry.getValue().isExpired()) {
+                            System.out.println("Removing expired entry → " + entry.getKey());
+                            iterator.remove();
+                        }
+                    }
+                }
+            }
+        });
+
+        cleaner.setDaemon(true);
+        cleaner.start();
+    }
+}
+
+/* Main Class */
+public class Assignment {
+
+    public static void main(String[] args) throws Exception {
+
+        DNSCache dnsCache = new DNSCache(5);
+
+        dnsCache.resolve("google.com");
+        dnsCache.resolve("google.com");
+        dnsCache.resolve("facebook.com");
+        dnsCache.resolve("google.com");
+        dnsCache.resolve("youtube.com");
+
+        Thread.sleep(2000);
+
+        dnsCache.resolve("facebook.com");
+
+        dnsCache.getCacheStats();
     }
 }
