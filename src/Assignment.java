@@ -1,166 +1,180 @@
 import java.util.*;
-import java.time.*;
-import java.time.format.DateTimeFormatter;
 
-class Transaction {
-    int id;
-    int amount;
-    String merchant;
-    String account;
-    LocalTime time;
+class VideoData {
+    String videoId;
+    String content;
 
-    public Transaction(int id, int amount, String merchant, String account, String time) {
-        this.id = id;
-        this.amount = amount;
-        this.merchant = merchant;
-        this.account = account;
-        this.time = LocalTime.parse(time);
+    public VideoData(String videoId, String content) {
+        this.videoId = videoId;
+        this.content = content;
+    }
+}
+
+/* LRU Cache using LinkedHashMap */
+class LRUCache<K, V> extends LinkedHashMap<K, V> {
+
+    private int capacity;
+
+    public LRUCache(int capacity) {
+        super(capacity, 0.75f, true); // access-order = true
+        this.capacity = capacity;
     }
 
-    public String toString() {
-        return "ID:" + id + " Amount:" + amount + " Merchant:" + merchant + " Account:" + account + " Time:" + time;
+    protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {
+        return size() > capacity;
     }
 }
 
 public class Assignment {
 
-    List<Transaction> transactions = new ArrayList<>();
+    /* Cache Sizes */
+    private static final int L1_SIZE = 10000;
+    private static final int L2_SIZE = 100000;
 
-    public void addTransaction(Transaction t) {
-        transactions.add(t);
+    /* Promotion Threshold */
+    private static final int PROMOTION_THRESHOLD = 3;
+
+    /* Caches */
+    private LRUCache<String, VideoData> l1Cache = new LRUCache<>(L1_SIZE);
+    private LRUCache<String, VideoData> l2Cache = new LRUCache<>(L2_SIZE);
+
+    /* Database simulation */
+    private Map<String, VideoData> database = new HashMap<>();
+
+    /* Access counter */
+    private Map<String, Integer> accessCount = new HashMap<>();
+
+    /* Statistics */
+    private int l1Hits = 0;
+    private int l2Hits = 0;
+    private int l3Hits = 0;
+
+    /* Constructor */
+    public Assignment() {
+        // simulate database
+        for (int i = 1; i <= 200000; i++) {
+            String id = "video_" + i;
+            database.put(id, new VideoData(id, "VideoContent_" + i));
+        }
     }
 
-    public List<List<Integer>> findTwoSum(int target) {
+    /* Get Video */
+    public VideoData getVideo(String videoId) {
 
-        Map<Integer, Transaction> map = new HashMap<>();
-        List<List<Integer>> result = new ArrayList<>();
+        long start = System.currentTimeMillis();
 
-        for (Transaction t : transactions) {
+        /* L1 Cache */
+        if (l1Cache.containsKey(videoId)) {
+            l1Hits++;
+            simulateLatency(1);
+            System.out.println("L1 Cache HIT");
+            return l1Cache.get(videoId);
+        }
 
-            int complement = target - t.amount;
+        System.out.println("L1 Cache MISS");
 
-            if (map.containsKey(complement)) {
-                result.add(Arrays.asList(map.get(complement).id, t.id));
+        /* L2 Cache */
+        if (l2Cache.containsKey(videoId)) {
+            l2Hits++;
+            simulateLatency(5);
+            System.out.println("L2 Cache HIT");
+
+            VideoData video = l2Cache.get(videoId);
+            increaseAccess(videoId);
+
+            /* Promotion to L1 */
+            if (accessCount.get(videoId) > PROMOTION_THRESHOLD) {
+                promoteToL1(videoId, video);
             }
 
-            map.put(t.amount, t);
+            return video;
         }
 
-        return result;
+        System.out.println("L2 Cache MISS");
+
+        /* L3 Database */
+        if (database.containsKey(videoId)) {
+            l3Hits++;
+            simulateLatency(150);
+            System.out.println("L3 Database HIT");
+
+            VideoData video = database.get(videoId);
+
+            l2Cache.put(videoId, video);
+            increaseAccess(videoId);
+
+            return video;
+        }
+
+        System.out.println("Video not found");
+        return null;
     }
 
-    public List<List<Integer>> findTwoSumWithinHour(int target) {
-
-        Map<Integer, Transaction> map = new HashMap<>();
-        List<List<Integer>> result = new ArrayList<>();
-
-        for (Transaction t : transactions) {
-
-            int complement = target - t.amount;
-
-            if (map.containsKey(complement)) {
-
-                Transaction prev = map.get(complement);
-
-                long diff = Duration.between(prev.time, t.time).toMinutes();
-
-                if (Math.abs(diff) <= 60) {
-                    result.add(Arrays.asList(prev.id, t.id));
-                }
-            }
-
-            map.put(t.amount, t);
-        }
-
-        return result;
+    /* Promote video from L2 to L1 */
+    private void promoteToL1(String videoId, VideoData video) {
+        l1Cache.put(videoId, video);
+        System.out.println("Promoted " + videoId + " to L1 Cache");
     }
 
-    public List<List<Integer>> findKSum(int k, int target) {
-
-        List<List<Integer>> result = new ArrayList<>();
-        backtrack(k, target, 0, new ArrayList<>(), result);
-        return result;
+    /* Increase access count */
+    private void increaseAccess(String videoId) {
+        accessCount.put(videoId, accessCount.getOrDefault(videoId, 0) + 1);
     }
 
-    private void backtrack(int k, int target, int start,
-                           List<Transaction> current,
-                           List<List<Integer>> result) {
+    /* Cache invalidation */
+    public void updateVideo(String videoId, String newContent) {
 
-        if (k == 0 && target == 0) {
+        VideoData video = new VideoData(videoId, newContent);
 
-            List<Integer> ids = new ArrayList<>();
+        database.put(videoId, video);
 
-            for (Transaction t : current)
-                ids.add(t.id);
+        l1Cache.remove(videoId);
+        l2Cache.remove(videoId);
 
-            result.add(ids);
-            return;
-        }
+        accessCount.remove(videoId);
 
-        if (k == 0 || start >= transactions.size())
-            return;
-
-        for (int i = start; i < transactions.size(); i++) {
-
-            Transaction t = transactions.get(i);
-
-            current.add(t);
-
-            backtrack(k - 1, target - t.amount, i + 1, current, result);
-
-            current.remove(current.size() - 1);
-        }
+        System.out.println("Cache invalidated for " + videoId);
     }
 
-    public void detectDuplicates() {
+    /* Statistics */
+    public void getStatistics() {
 
-        Map<String, List<Transaction>> map = new HashMap<>();
+        int total = l1Hits + l2Hits + l3Hits;
 
-        for (Transaction t : transactions) {
+        double l1Rate = (l1Hits * 100.0) / total;
+        double l2Rate = (l2Hits * 100.0) / total;
+        double l3Rate = (l3Hits * 100.0) / total;
 
-            String key = t.amount + "-" + t.merchant;
+        System.out.println("\nCache Statistics:");
+        System.out.println("L1 Hits: " + l1Hits + " Hit Rate: " + l1Rate + "%");
+        System.out.println("L2 Hits: " + l2Hits + " Hit Rate: " + l2Rate + "%");
+        System.out.println("L3 Hits: " + l3Hits + " Hit Rate: " + l3Rate + "%");
+    }
 
-            map.putIfAbsent(key, new ArrayList<>());
-            map.get(key).add(t);
-        }
-
-        for (String key : map.keySet()) {
-
-            List<Transaction> list = map.get(key);
-
-            Set<String> accounts = new HashSet<>();
-
-            for (Transaction t : list)
-                accounts.add(t.account);
-
-            if (accounts.size() > 1) {
-
-                System.out.println("Duplicate Suspicious Transaction:");
-                System.out.println("Amount-Merchant: " + key);
-                System.out.println("Accounts: " + accounts);
-            }
+    /* Simulate latency */
+    private void simulateLatency(int ms) {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
+    /* Main Test */
     public static void main(String[] args) {
 
-        Assignment system = new Assignment();
+        Assignment cache = new Assignment();
 
-        system.addTransaction(new Transaction(1, 500, "StoreA", "acc1", "10:00"));
-        system.addTransaction(new Transaction(2, 300, "StoreB", "acc2", "10:15"));
-        system.addTransaction(new Transaction(3, 200, "StoreC", "acc3", "10:30"));
-        system.addTransaction(new Transaction(4, 500, "StoreA", "acc4", "10:40"));
+        cache.getVideo("video_123");
+        cache.getVideo("video_123");
+        cache.getVideo("video_999");
+        cache.getVideo("video_123");
+        cache.getVideo("video_123");
 
-        System.out.println("Two Sum Target 500:");
-        System.out.println(system.findTwoSum(500));
+        cache.updateVideo("video_123", "UpdatedContent");
 
-        System.out.println("\nTwo Sum within 1 hour Target 500:");
-        System.out.println(system.findTwoSumWithinHour(500));
+        cache.getVideo("video_123");
 
-        System.out.println("\nK Sum (k=3 target=1000):");
-        System.out.println(system.findKSum(3, 1000));
-
-        System.out.println("\nDuplicate Detection:");
-        system.detectDuplicates();
+        cache.getStatistics();
     }
 }
