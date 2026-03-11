@@ -1,108 +1,71 @@
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.*;
 
-class TokenBucket {
-
-    private double tokens;
-    private final double maxTokens;
-    private final double refillRate;
-    private long lastRefillTime;
-
-    public TokenBucket(double maxTokens, double refillRate) {
-        this.maxTokens = maxTokens;
-        this.refillRate = refillRate;
-        this.tokens = maxTokens;
-        this.lastRefillTime = System.currentTimeMillis();
-    }
-
-    private void refill() {
-        long currentTime = System.currentTimeMillis();
-        double seconds = (currentTime - lastRefillTime) / 1000.0;
-
-        double refillTokens = seconds * refillRate;
-        tokens = Math.min(maxTokens, tokens + refillTokens);
-
-        lastRefillTime = currentTime;
-    }
-
-    public synchronized boolean allowRequest() {
-        refill();
-
-        if (tokens >= 1) {
-            tokens -= 1;
-            return true;
-        }
-
-        return false;
-    }
-
-    public synchronized double getRemainingTokens() {
-        refill();
-        return tokens;
-    }
-
-    public long getResetTimeSeconds() {
-        return (long)((maxTokens - tokens) / refillRate);
-    }
+class TrieNode {
+    Map<Character, TrieNode> children = new HashMap<>();
+    PriorityQueue<String> topQueries =
+            new PriorityQueue<>((a, b) -> AutocompleteSystem.freq.get(a) - AutocompleteSystem.freq.get(b));
 }
 
-public class Assignment {
+class AutocompleteSystem {
 
-    private static final int MAX_REQUESTS = 1000;
-    private static final int WINDOW_SECONDS = 3600;
+    static Map<String, Integer> freq = new HashMap<>();
+    TrieNode root = new TrieNode();
+    int TOP_K = 10;
 
-    private static final double REFILL_RATE = (double) MAX_REQUESTS / WINDOW_SECONDS;
+    public void addQuery(String query) {
+        freq.put(query, freq.getOrDefault(query, 0) + 1);
 
-    private ConcurrentHashMap<String, TokenBucket> clientBuckets = new ConcurrentHashMap<>();
+        TrieNode node = root;
 
+        for (char c : query.toCharArray()) {
+            node.children.putIfAbsent(c, new TrieNode());
+            node = node.children.get(c);
 
-    public boolean checkRateLimit(String clientId) {
+            node.topQueries.remove(query);
+            node.topQueries.offer(query);
 
-        TokenBucket bucket = clientBuckets.computeIfAbsent(
-                clientId,
-                id -> new TokenBucket(MAX_REQUESTS, REFILL_RATE)
-        );
-
-        boolean allowed = bucket.allowRequest();
-
-        if (allowed) {
-            System.out.println("Allowed (" + (int)bucket.getRemainingTokens() + " requests remaining)");
-        } else {
-            System.out.println("Denied (0 requests remaining, retry after "
-                    + bucket.getResetTimeSeconds() + "s)");
+            if (node.topQueries.size() > TOP_K)
+                node.topQueries.poll();
         }
-
-        return allowed;
     }
 
+    public List<String> search(String prefix) {
 
-    public void getRateLimitStatus(String clientId) {
+        TrieNode node = root;
 
-        TokenBucket bucket = clientBuckets.get(clientId);
+        for (char c : prefix.toCharArray()) {
+            if (!node.children.containsKey(c))
+                return new ArrayList<>();
 
-        if (bucket == null) {
-            System.out.println("{used: 0, limit: 1000, reset: 3600}");
-            return;
+            node = node.children.get(c);
         }
 
-        double remaining = bucket.getRemainingTokens();
-        int used = MAX_REQUESTS - (int)remaining;
+        List<String> result = new ArrayList<>(node.topQueries);
 
-        System.out.println("{used: " + used +
-                ", limit: " + MAX_REQUESTS +
-                ", reset: " + bucket.getResetTimeSeconds() + "}");
+        result.sort((a, b) -> freq.get(b) - freq.get(a));
+
+        return result;
     }
 
+    public void updateFrequency(String query) {
+        addQuery(query);
+    }
 
     public static void main(String[] args) {
 
-        Assignment limiter = new Assignment();
+        AutocompleteSystem system = new AutocompleteSystem();
 
-        String client = "abc123";
+        system.addQuery("java tutorial");
+        system.addQuery("javascript");
+        system.addQuery("java download");
+        system.addQuery("java 21 features");
+        system.addQuery("java interview questions");
 
-        for (int i = 0; i < 5; i++) {
-            limiter.checkRateLimit(client);
-        }
+        System.out.println(system.search("jav"));
 
-        limiter.getRateLimitStatus(client);
+        system.updateFrequency("java 21 features");
+        system.updateFrequency("java 21 features");
+
+        System.out.println(system.search("java"));
     }
 }
