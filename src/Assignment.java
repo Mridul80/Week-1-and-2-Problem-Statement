@@ -1,71 +1,160 @@
+import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.*;
 
-class TrieNode {
-    Map<Character, TrieNode> children = new HashMap<>();
-    PriorityQueue<String> topQueries =
-            new PriorityQueue<>((a, b) -> AutocompleteSystem.freq.get(a) - AutocompleteSystem.freq.get(b));
-}
+public class Assignment {
 
-class AutocompleteSystem {
+    enum Status {
+        EMPTY, OCCUPIED, DELETED
+    }
 
-    static Map<String, Integer> freq = new HashMap<>();
-    TrieNode root = new TrieNode();
-    int TOP_K = 10;
+    static class ParkingSpot {
+        String licensePlate;
+        LocalDateTime entryTime;
+        Status status;
 
-    public void addQuery(String query) {
-        freq.put(query, freq.getOrDefault(query, 0) + 1);
-
-        TrieNode node = root;
-
-        for (char c : query.toCharArray()) {
-            node.children.putIfAbsent(c, new TrieNode());
-            node = node.children.get(c);
-
-            node.topQueries.remove(query);
-            node.topQueries.offer(query);
-
-            if (node.topQueries.size() > TOP_K)
-                node.topQueries.poll();
+        ParkingSpot() {
+            status = Status.EMPTY;
         }
     }
 
-    public List<String> search(String prefix) {
+    private ParkingSpot[] table;
+    private int capacity;
+    private int size;
 
-        TrieNode node = root;
+    private int totalProbes = 0;
+    private int operations = 0;
 
-        for (char c : prefix.toCharArray()) {
-            if (!node.children.containsKey(c))
-                return new ArrayList<>();
+    private Map<Integer, Integer> hourlyTraffic = new HashMap<>();
 
-            node = node.children.get(c);
+    public Assignment(int capacity) {
+        this.capacity = capacity;
+        table = new ParkingSpot[capacity];
+
+        for (int i = 0; i < capacity; i++)
+            table[i] = new ParkingSpot();
+    }
+
+    private int hash(String plate) {
+        return Math.abs(plate.hashCode()) % capacity;
+    }
+
+    public void parkVehicle(String plate) {
+
+        int index = hash(plate);
+        int probes = 0;
+
+        while (table[index].status == Status.OCCUPIED) {
+            index = (index + 1) % capacity;
+            probes++;
+
+            if (probes >= capacity) {
+                System.out.println("Parking Full");
+                return;
+            }
         }
 
-        List<String> result = new ArrayList<>(node.topQueries);
+        table[index].licensePlate = plate;
+        table[index].entryTime = LocalDateTime.now();
+        table[index].status = Status.OCCUPIED;
 
-        result.sort((a, b) -> freq.get(b) - freq.get(a));
+        size++;
 
-        return result;
+        totalProbes += probes;
+        operations++;
+
+        int hour = LocalDateTime.now().getHour();
+        hourlyTraffic.put(hour, hourlyTraffic.getOrDefault(hour, 0) + 1);
+
+        System.out.println("parkVehicle(\"" + plate + "\") → Assigned spot #" + index +
+                " (" + probes + " probes)");
+    }
+    public void exitVehicle(String plate) {
+
+        int index = hash(plate);
+        int probes = 0;
+
+        while (table[index].status != Status.EMPTY) {
+
+            if (table[index].status == Status.OCCUPIED &&
+                    table[index].licensePlate.equals(plate)) {
+
+                LocalDateTime exit = LocalDateTime.now();
+
+                Duration duration =
+                        Duration.between(table[index].entryTime, exit);
+
+                long minutes = duration.toMinutes();
+
+                double fee = minutes * 0.1;
+
+                table[index].status = Status.DELETED;
+                table[index].licensePlate = null;
+
+                size--;
+
+                System.out.println(
+                        "exitVehicle(\"" + plate + "\") → Spot #" + index +
+                                " freed, Duration: " + minutes + " mins, Fee: $" +
+                                String.format("%.2f", fee)
+                );
+
+                return;
+            }
+
+            index = (index + 1) % capacity;
+            probes++;
+
+            if (probes >= capacity)
+                break;
+        }
+
+        System.out.println("Vehicle not found.");
     }
 
-    public void updateFrequency(String query) {
-        addQuery(query);
+    public int findNearestSpot() {
+
+        for (int i = 0; i < capacity; i++) {
+            if (table[i].status != Status.OCCUPIED)
+                return i;
+        }
+
+        return -1;
     }
 
+    public void getStatistics() {
+
+        double occupancy = (size * 100.0) / capacity;
+
+        double avgProbes =
+                operations == 0 ? 0 : (double) totalProbes / operations;
+
+        int peakHour = -1;
+        int max = 0;
+
+        for (int hour : hourlyTraffic.keySet()) {
+
+            if (hourlyTraffic.get(hour) > max) {
+                max = hourlyTraffic.get(hour);
+                peakHour = hour;
+            }
+        }
+
+        System.out.println("\nParking Statistics:");
+        System.out.println("Occupancy: " + String.format("%.2f", occupancy) + "%");
+        System.out.println("Avg Probes: " + String.format("%.2f", avgProbes));
+        System.out.println("Peak Hour: " + peakHour + "-" + (peakHour + 1));
+    }
     public static void main(String[] args) {
 
-        AutocompleteSystem system = new AutocompleteSystem();
+        Assignment parking = new Assignment(500);
 
-        system.addQuery("java tutorial");
-        system.addQuery("javascript");
-        system.addQuery("java download");
-        system.addQuery("java 21 features");
-        system.addQuery("java interview questions");
+        parking.parkVehicle("ABC-1234");
+        parking.parkVehicle("ABC-1235");
+        parking.parkVehicle("XYZ-9999");
 
-        System.out.println(system.search("jav"));
+        parking.exitVehicle("ABC-1234");
 
-        system.updateFrequency("java 21 features");
-        system.updateFrequency("java 21 features");
-
-        System.out.println(system.search("java"));
+        parking.getStatistics();
     }
 }
